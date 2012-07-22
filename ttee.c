@@ -49,6 +49,8 @@ struct wrdata {
 	int dropped, processed;
 	int numfiles;
 
+	int eof;
+
 };
 
 struct threaddat {
@@ -148,8 +150,12 @@ void *rcv_thread(void *ptr) {
 		// we check nothing. There are no error conditions that we care about.
 		select( dat->fd + 1, &reads, NULL, NULL, &tv );
 
-		if ( (buffdat = read ( dat->fd, buff, BUFSZ ) ) <=0 )
-			continue;
+		if ( (buffdat = read ( dat->fd, buff, BUFSZ ) ) <=0 ) {
+			if ( (buffdat == -1) && (errno = EAGAIN))
+				continue;
+			__sync_fetch_and_add(&dat->eof, 1);
+			pthread_exit(NULL);
+		}
 
 		pthread_mutex_lock(&dat->wrlock);
 
@@ -205,8 +211,14 @@ void *wrt_thread(void *ptr) {
 
 		if ( RP == WP[fdno] ) {
 
-			sleep_10ms();
+			if (dat->eof > 0) {
+				__sync_fetch_and_add(&dat->eof, 1);
+				if (dat->eof == (dat->numfiles + 1) )
+					exit(0);
+				pthread_exit(NULL);
+			}
 
+			sleep_10ms();
 			continue;
 		}
 
