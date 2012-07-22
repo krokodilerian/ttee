@@ -1,0 +1,38 @@
+Threaded tee
+
+ttee is a simple tool to copy stdin to more than one output files/pipes.
+The main difference between it and the unix tee is that the unix tee
+does something like this:
+while (1) {
+	bytes_read = read (0, buffer, sizeof buffer);
+	if (bytes_read < 0 && errno == EINTR)
+		continue;
+	if (bytes_read <= 0)
+		break;
+
+      /* Write to all NFILES + 1 descriptors.
+         Standard output is the first one.  */
+	for (i = 0; i <= nfiles; i++)
+		if (descriptors[i] && fwrite (buffer, bytes_read, 1, descriptors[i]) != 1)  {
+			error (0, errno, "%s", files[i]);
+			descriptors[i] = NULL;
+			ok = false;
+		}
+}
+
+
+which has the unfortunate side effect of combining the latency of all inputs
+in a way which makes it very hard to use to record real-time data.
+
+This was written mostly for me to be able to log the data from dvgrab which
+was in the mean time piped to vlc to be streamed.
+
+The tool uses a simple ring buffer and a thread for each task - one reader
+and multiple writers. The code is very simple (although it can be simplified
+a bit more) and work well enough to be used in production.
+
+While running, it will display every few seconds some stats on it's performance.
+The most interesing from user POV are the last numbers, which show for each thread
+how behind it is in on writing the ring buffer.
+
+For anything to configure, look at config.h.
