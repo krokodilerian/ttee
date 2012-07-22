@@ -57,17 +57,13 @@
 struct wrdata {
 	int rpos; // position of the element receiving data
 	int wpos[MAXFILES]; // position of the element being written
-	char *cbuf[MAXBUF]; // buffers with data
-	int numq[MAXBUF]; // number of queries
-	int buflen[MAXBUF];
-	int bufpos[MAXBUF];
-	int bufref[MAXBUF];
+	char *cbuf; // buffer with data
+	int buflen;
+	int bufpos;
 	pthread_mutex_t wrlock;
-	time_t firstq; // time of the first query for the current buffer
 
 	int fd;
 	int fdo[MAXFILES];
-	char *prepend, *append;
 
 	int dropped, processed;
 	int numfiles;
@@ -92,20 +88,35 @@ struct threaddat {
 
 int diffpos(int a, int b) {
 	if (b>=a) return b-a;
-	return a-b + MAXBUF;
+	return a-b + BUFFER;
+}
+
+/*
+	check if we read a packet at position rp in a ring buffer
+	with size of BUFFER, we won't clobber wp
+*/
+int overflows (int rp, int len, int wp) {
+	int p1, p2;
+
+	if ( ( (rp+len) < BUFFER ) && ( (wp <= rp) || (wp > rp + len) ) )
+		return 0;
+
+	// really fugly corner case
+	if ( (rp+len) == BUFFER && wp == 0 )
+		return 1;
+
+	p1 = BUFFER - rp;
+	p2 = len - p1;
+
+	if ( (wp < rp) && (wp > p2) )
+		return 0;
+
+	return 1;
 }
 
 
 #define RP dat->rpos
 #define WP dat->wpos
-
-#define INIT_READ_BUFFER(DAT, NUM) { DAT->numq[NUM] = 0;\
-	DAT->bufpos[NUM] = 0;\
-	DAT->buflen[NUM] = BUFSZ;\
-	DAT->cbuf[NUM] = calloc( BUFSZ, 1 );\
-	DAT->firstq = time ( NULL );\
-	DAT->bufref[NUM] = DAT->numfiles;\
-}
 
 void *rcv_thread(void *ptr) {
 	char buff[BUFSZ];
@@ -114,15 +125,20 @@ void *rcv_thread(void *ptr) {
 	int buffdat = 0;
 
 	int j;
+	int p1, p2;
 
 	struct timeval tv;
+
+	struct timespec tv2;
+
 	fd_set reads;
 	long flags;	
 
 	flags = fcntl( dat->fd, F_GETFL, 0 );
 	fcntl( dat->fd, F_SETFL, flags | O_NONBLOCK );
 
-	INIT_READ_BUFFER(dat, 0);
+	dat->cbuf = calloc( BUFFER, 1 );
+	RP = 0;
 
 	while (42) {
 
@@ -135,31 +151,6 @@ void *rcv_thread(void *ptr) {
 		// we check nothing. There are no error conditions that we care about.
 		select( dat->fd + 1, &reads, NULL, NULL, &tv );
 
-		if ( time(NULL) - dat->firstq > DEADTIME ) {
-			pthread_mutex_lock( &dat->wrlock );
-			for (j=0; j<dat->numfiles; j++) 
-				if ( ( (RP + 1) % MAXBUF ) == WP[j] ) {
-					// we either die here, because we're overflowed, or block for a while.
-					// right now dying is easier.
-					DBG("Ring buffer overflow, dying");
-					exit(3);
-					pthread_mutex_unlock( &dat->wrlock );
-					// write pointer, we meet again
-					// drop current data, loop.
-					//DBG("Out of buffers %d %d!\n", RP, WP);
-					// We need to read the packet to drop it.
-					read ( dat->fd, buff, bufflen );
-					dat->dropped ++;
-					continue;
-			}
-			DBG("Timeout: New read buffer %d\n", RP);
-			RP = (RP + 1) % MAXBUF;
-
-			INIT_READ_BUFFER( dat, RP );
-
-			pthread_mutex_unlock( &dat->wrlock );
-		}
-
 		if ( (buffdat = read ( dat->fd, buff, bufflen ) ) <=0 )
 			continue;
 
@@ -168,42 +159,36 @@ void *rcv_thread(void *ptr) {
 
 		// the current buffer is full, switch to a new one
 		// or the timeout passed
-		if ( dat->numq[RP] >= MAXQ  || time( NULL ) - dat->firstq > DEADTIME ) {
-			for (j=0; j<dat->numfiles; j++) 
-				if ( ( (RP + 1) % MAXBUF ) == WP[j] ) {
-					// we either die here, because we're overflowed, or block for a while.
-					// right now dying is easier.
-					DBG("Ring buffer overflow, dying");
-					exit(3);
-					pthread_mutex_unlock( &dat->wrlock );
-					// write pointer, we meet again
-					// drop current data, loop.
-					//DBG("Out of buffers %d %d!\n", RP, WP);
-					// We need to read the packet to drop it.
-					read ( dat->fd, buff, bufflen );
-					dat->dropped ++;
-					continue;
-			}
-
-			DBG("New read buffer %d oldsz %d\n", RP, dat->bufpos[RP]);
-			RP = (RP + 1) % MAXBUF;
-
-			INIT_READ_BUFFER( dat, RP );
-
+		for (j=0; j<dat->numfiles; j++) 
+			if ( overflows (RP,  buffdat, WP[j]) ) {
+				// we either die here, because we're overflowed, or block for a while.
+				// right now dying is easier.
+				DBG("Ring buffer overflow, sleeping - RP %d WP %d WPid %d\n", RP, WP[j], j);
+				pthread_mutex_unlock( &dat->wrlock );
+				tv2.tv_sec = 0;
+				tv2.tv_nsec = 1000*1000*10; // 10ms
+				nanosleep( &tv2, NULL );
+				continue;
 		}
 
-		// resize the buffer if needed
-		if ( ( dat->buflen[RP] - dat->bufpos[RP] ) < buffdat ) {
-			dat->buflen[RP] = dat->buflen[RP] + buffdat + 2 ;
-			dat->cbuf[RP] = realloc ( dat->cbuf[RP], dat->buflen[RP] );
-			
+		if (RP + buffdat <= BUFFER) {
+			// easy case
+			memcpy ( &(dat->cbuf[RP]), buff, buffdat ); 
+		} else {
+			// fuck
+			p1 = BUFFER - RP;
+			p2 = buffdat - p1;
+
+			memcpy ( &(dat->cbuf[RP]), buff, p1 ); 
+			memcpy ( &(dat->cbuf[0]), &buff[p1], p2 ); 
+
 		}
-		
-		memcpy ( &(dat->cbuf[RP][dat->bufpos[RP]]), buff, buffdat ); 
-		dat->bufpos[RP] += buffdat;
-		dat->numq[RP] ++;
+		RP += buffdat;
+		RP %= BUFFER;
+		DBG ("RP moved to %d\n", RP);
+
 		pthread_mutex_unlock( &dat->wrlock );
-		dat->processed ++;
+		dat->processed += buffdat;
 	}
 	return NULL;
 }
@@ -217,7 +202,7 @@ void *wrt_thread(void *ptr) {
 
 	int fdno = tdat->fdno;
 
-	int datapos, numq;
+	int datalen;
 
 	DBG("Starting write thread %d\n", fdno);	
 
@@ -234,46 +219,25 @@ void *wrt_thread(void *ptr) {
 
 		pthread_mutex_lock( &dat->wrlock );
 		for ( ; WP[fdno] != RP; ) {
-			DBG("thread %d writing %d %d\n", fdno, WP[fdno], dat->bufpos[WP[fdno]]);
-			if (dat->bufref[WP[fdno]] < 1) {
-				DBG("FUCK %d %d %d %d\n", RP, WP[fdno], fdno, dat->bufref[WP[fdno]]);
-				exit(2);
+			if (RP > WP[fdno]) {
+				datalen = RP - WP[fdno];
+			} else {
+				datalen = BUFFER - WP[fdno];
 			}
-			wrbuf = malloc(dat->bufpos[WP[fdno]]);
-			memcpy(wrbuf, dat->cbuf[WP[fdno]], dat->bufpos[WP[fdno]]);
-			__sync_fetch_and_sub(&dat->bufref[WP[fdno]],1);
+			wrbuf = malloc(datalen);
+			memcpy(wrbuf, &dat->cbuf[WP[fdno]], datalen);
 
-			datapos = dat->bufpos[WP[fdno]];
-			numq = dat->numq[WP[fdno]];
-
-			// Can we dealloc this buffer?
-			if (dat->bufref[WP[fdno]] == 0) {
-				dat->bufref[WP[fdno]]=-1;
-				free(dat->cbuf[WP[fdno]]);
-				dat->numq[WP[fdno]] = 0;
-				dat->cbuf[WP[fdno]] = NULL;
-				DBG("thread %d dealloc %d\n", fdno, WP[fdno]);
-			}
-
-			WP[fdno] = ( WP[fdno] +1 ) % MAXBUF;
+			WP[fdno] += datalen;
+			WP[fdno] %= BUFFER;
 
 			pthread_mutex_unlock( &dat->wrlock );// Dumping the data, leave the reader to work	
 
-			if ( numq == 0 ) { // empty/timed out buffer
-				free( wrbuf );
-				continue;
-			}
-
 			// Write the data 
 
-			DBG("thread %d really writing %d %d\n", fdno, WP[fdno], datapos);
-			if ( write( dat->fdo[fdno], wrbuf, datapos ) < datapos ) {
+			DBG("thread %d really writing %d %d\n", fdno, WP[fdno], datalen);
+			if ( write( dat->fdo[fdno], wrbuf, datalen ) < datalen ) {
 				DBG("failed writing in thread %d, error %s\n", fdno, strerror(errno));
 				exit(3);
-				dat->dropped += numq;
-				free(wrbuf);
-
-				break;
 			}
 
 			free( wrbuf );
@@ -295,17 +259,12 @@ struct wrdata *init_wrdata (int num, char **outpath) {
 
 	dat = (struct wrdata *) calloc (1, sizeof(struct wrdata));
 
-	for (i = 0; i<MAXBUF ; i++) {
-		dat->cbuf[i] = NULL;
-		dat->bufref[i] = -1;
-	}
-
 	dat->numfiles = num;
 
 	pthread_mutex_init(&dat->wrlock, NULL);
 
-	dat->fd = 0;
-	dat->firstq = time(NULL);
+	dat->fd = STDIN_FILENO;
+
 	for (i = 0; i<num; i++) {
 		dat->fdo[i] = open(outpath[i], O_CREAT | O_WRONLY,  S_IRUSR | S_IWUSR );
 		if (dat->fdo[i] == -1 ) {
@@ -328,6 +287,9 @@ int main(int argc, char **argv) {
 
 	pthread_t thread;
 	pthread_attr_t attr;
+
+	setlinebuf(stdout);
+	setlinebuf(stderr);
 
 	if (argc < 2 || argc > MAXFILES ) {
 		printf ("Usage: %s file1 file2 [file3] [file4]...[file64]\n", argv[0]);
