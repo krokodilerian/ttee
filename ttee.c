@@ -66,7 +66,17 @@ struct threaddat {
 	#define min( a, b ) ( ((a) < (b)) ? (a) : (b) )
 #endif
 
+inline void sleep_10ms() {
+	struct timespec tv;
+	tv.tv_sec = 0;
+	tv.tv_nsec = 1000*1000*10; // 10ms
+	nanosleep( &tv, NULL );
+}
 
+/*
+	returns the distance between positions a and b in a
+	ringbuffer with size of BUFFER
+*/
 int diffpos(int a, int b) {
 	if (b>=a) return b-a;
 	return a-b + BUFFER;
@@ -109,8 +119,6 @@ void *rcv_thread(void *ptr) {
 
 	struct timeval tv;
 
-	struct timespec tv2;
-
 	fd_set reads;
 	long flags;	
 
@@ -141,9 +149,7 @@ void *rcv_thread(void *ptr) {
 			if ( overflows (RP,  buffdat, WP[j]) ) {
 				DBG("Ring buffer overflow, sleeping - RP %d WP %d WPid %d\n", RP, WP[j], j);
 				pthread_mutex_unlock( &dat->wrlock );
-				tv2.tv_sec = 0;
-				tv2.tv_nsec = 1000*1000*10; // 10ms
-				nanosleep( &tv2, NULL );
+				sleep_10ms();
 				continue;
 		}
 
@@ -175,7 +181,6 @@ void *wrt_thread(void *ptr) {
 	struct threaddat *tdat = (struct threaddat *) ptr;
 	struct wrdata *dat = (struct wrdata *) tdat->dat;
 	char *wrbuf;
-	struct timespec tv;
 
 	int datalen;
 
@@ -188,9 +193,7 @@ void *wrt_thread(void *ptr) {
 
 		if ( RP == WP[fdno] ) {
 
-			tv.tv_sec = 0;
-			tv.tv_nsec = 1000*1000*10; // 10ms
-			nanosleep( &tv, NULL );
+			sleep_10ms();
 
 			continue;
 		}
@@ -219,7 +222,6 @@ void *wrt_thread(void *ptr) {
 			}
 
 			free( wrbuf );
-
 		}
 	}
 	return NULL;
@@ -244,8 +246,8 @@ struct wrdata *init_wrdata (int num, char **outpath) {
 	for (i = 0; i<num; i++) {
 		dat->fdo[i] = open(outpath[i], O_CREAT | O_WRONLY,  S_IRUSR | S_IWUSR );
 		if (dat->fdo[i] == -1 ) {
-			return NULL;
 			printf("Failed opening %s with error %s\n", outpath[i], strerror(errno));
+			return NULL;
 		}
 	}
 
