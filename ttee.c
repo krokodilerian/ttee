@@ -195,8 +195,8 @@ void *wrt_thread(void *ptr) {
 			continue;
 		}
 
-		pthread_mutex_lock( &dat->wrlock );
 		for ( ; WP[fdno] != RP; ) {
+			pthread_mutex_lock( &dat->wrlock );
 			if (RP > WP[fdno]) {
 				datalen = RP - WP[fdno];
 			} else {
@@ -212,7 +212,7 @@ void *wrt_thread(void *ptr) {
 
 			// Write the data 
 
-			DBG("thread %d really writing %d %d\n", fdno, WP[fdno], datalen);
+			DBG("thread %d writing %d %d\n", fdno, WP[fdno], datalen);
 			if ( write( dat->fdo[fdno], wrbuf, datalen ) < datalen ) {
 				DBG("failed writing in thread %d, error %s\n", fdno, strerror(errno));
 				exit(3);
@@ -220,9 +220,7 @@ void *wrt_thread(void *ptr) {
 
 			free( wrbuf );
 
-			pthread_mutex_lock( &dat->wrlock );	
 		}
-		pthread_mutex_unlock( &dat->wrlock );	
 	}
 	return NULL;
 }
