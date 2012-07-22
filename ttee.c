@@ -85,6 +85,17 @@ int diffpos(int a, int b) {
 /*
 	check wether if we read a packet at position rp in a ring buffer
 	with size of BUFFER, we won't clobber wp
+
+	it's basically like this:
+
+	if we don't overflow the buffer, then wp needs to be either before
+	rp, or after rp+len
+
+	if we overflow the buffer, then wp needs to be before rp AND after
+	the remainder of the piece of data (len + rp - BUFFER)
+
+	if we are exactly at the end of the buffer and the wp is 0, we 
+	have a fucking specific corner case.
 */
 int overflows (int rp, int len, int wp) {
 	int p1, p2;
@@ -96,10 +107,9 @@ int overflows (int rp, int len, int wp) {
 	if ( (rp+len) == BUFFER && wp == 0 )
 		return 1;
 
-	p1 = BUFFER - rp;
-	p2 = len - p1;
+	rem = len + rp - BUFFER;
 
-	if ( (wp < rp) && (wp > p2) )
+	if ( (wp < rp) && (wp > rem) )
 		return 0;
 
 	return 1;
@@ -157,7 +167,9 @@ void *rcv_thread(void *ptr) {
 			// easy case
 			memcpy ( &(dat->cbuf[RP]), buff, buffdat ); 
 		} else {
-			// fuck
+			/* not-so-easy-case
+			   split the bufer in two, and copy them separately
+			*/
 			p1 = BUFFER - RP;
 			p2 = buffdat - p1;
 
