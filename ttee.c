@@ -98,7 +98,7 @@ int diffpos(int a, int b) {
 	have a fucking specific corner case.
 */
 int overflows (int rp, int len, int wp) {
-	int p1, p2;
+	int rem;
 
 	if ( ( (rp+len) < BUFFER ) && ( (wp <= rp) || (wp > rp + len) ) )
 		return 0;
