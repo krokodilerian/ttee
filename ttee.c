@@ -70,6 +70,8 @@ struct wrdata {
 	char *prepend, *append;
 
 	int dropped, processed;
+	int numfiles;
+
 };
 
 struct threaddat {
@@ -78,7 +80,6 @@ struct threaddat {
 };
 
 
-int numfiles;
 
 #ifndef max
 	#define max( a, b ) ( ((a) > (b)) ? (a) : (b) )
@@ -103,7 +104,7 @@ int diffpos(int a, int b) {
 	DAT->buflen[NUM] = BUFSZ;\
 	DAT->cbuf[NUM] = calloc( BUFSZ, 1 );\
 	DAT->firstq = time ( NULL );\
-	DAT->bufref[NUM] = numfiles;\
+	DAT->bufref[NUM] = DAT->numfiles;\
 }
 
 void *rcv_thread(void *ptr) {
@@ -136,7 +137,7 @@ void *rcv_thread(void *ptr) {
 
 		if ( time(NULL) - dat->firstq > DEADTIME ) {
 			pthread_mutex_lock( &dat->wrlock );
-			for (j=0; j<numfiles; j++) 
+			for (j=0; j<dat->numfiles; j++) 
 				if ( ( (RP + 1) % MAXBUF ) == WP[j] ) {
 					// we either die here, because we're overflowed, or block for a while.
 					// right now dying is easier.
@@ -168,7 +169,7 @@ void *rcv_thread(void *ptr) {
 		// the current buffer is full, switch to a new one
 		// or the timeout passed
 		if ( dat->numq[RP] >= MAXQ  || time( NULL ) - dat->firstq > DEADTIME ) {
-			for (j=0; j<numfiles; j++) 
+			for (j=0; j<dat->numfiles; j++) 
 				if ( ( (RP + 1) % MAXBUF ) == WP[j] ) {
 					// we either die here, because we're overflowed, or block for a while.
 					// right now dying is easier.
@@ -299,6 +300,8 @@ struct wrdata *init_wrdata (int num, char **outpath) {
 		dat->bufref[i] = -1;
 	}
 
+	dat->numfiles = num;
+
 	pthread_mutex_init(&dat->wrlock, NULL);
 
 	dat->fd = 0;
@@ -331,8 +334,7 @@ int main(int argc, char **argv) {
 		exit(3);
 	}
 
-	numfiles = argc - 1;
-	data = init_wrdata (numfiles, &argv[1]);
+	data = init_wrdata (argc - 1, &argv[1]);
 
 	if (!data)
 		exit(4);
@@ -340,7 +342,7 @@ int main(int argc, char **argv) {
 	pthread_attr_init(&attr);
 	pthread_create(&thread, &attr, rcv_thread, data);
 
-	for (i=0; i<numfiles; i++) {
+	for (i=0; i<data->numfiles; i++) {
 		tdat[i].dat = data;
 		tdat[i].fdno = i;
 
@@ -353,7 +355,7 @@ int main(int argc, char **argv) {
 		tv.tv_nsec = 0;
 		nanosleep( &tv, NULL);
 		printf("data: Dropped:\t%d\tProcesed:\t%d\tWP %d RP", data->dropped, data->processed, data->rpos);
-		for (i=0; i<numfiles; i++) 
+		for (i=0; i<data->numfiles; i++) 
 			printf (" %d", diffpos(data->rpos, data->wpos[i]));
 		printf("\n");
 	}
