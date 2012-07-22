@@ -121,7 +121,6 @@ int overflows (int rp, int len, int wp) {
 void *rcv_thread(void *ptr) {
 	char buff[BUFSZ];
 	struct wrdata *dat = (struct wrdata *) ptr;
-	int bufflen = BUFSZ;
 	int buffdat = 0;
 
 	int j;
@@ -151,7 +150,7 @@ void *rcv_thread(void *ptr) {
 		// we check nothing. There are no error conditions that we care about.
 		select( dat->fd + 1, &reads, NULL, NULL, &tv );
 
-		if ( (buffdat = read ( dat->fd, buff, bufflen ) ) <=0 )
+		if ( (buffdat = read ( dat->fd, buff, BUFSZ ) ) <=0 )
 			continue;
 
 		pthread_mutex_lock(&dat->wrlock);
@@ -161,8 +160,6 @@ void *rcv_thread(void *ptr) {
 		// or the timeout passed
 		for (j=0; j<dat->numfiles; j++) 
 			if ( overflows (RP,  buffdat, WP[j]) ) {
-				// we either die here, because we're overflowed, or block for a while.
-				// right now dying is easier.
 				DBG("Ring buffer overflow, sleeping - RP %d WP %d WPid %d\n", RP, WP[j], j);
 				pthread_mutex_unlock( &dat->wrlock );
 				tv2.tv_sec = 0;
