@@ -24,28 +24,11 @@
 
 /*
 
-	Small daemon to buffer requests
+	Simple threaded 'tee' replacement.
 
-	The principle of operation is as simple as possible - ring-buffer
-	where every element is filled up by requests coming from an unix domain
-	datagram socket. There are two threads - reader that reads from the
-	socket, and a writer that flushes the data to somewhere (currently
-	a mysql database, but it's easy to change). The daemon doesn't parse
-	the data, just collects it and passes it.
+	The basic idea is to use one reader and multiple writer threads
+	that share a ring buffer containing the data. 
 
-	If the reader thread catches up with the writer, packets get dropped.
-
-	If a buffer is not full, but more than DEADTIME seconds have passed,
-	it's passed to the writer anyway. This will also happen with empty
-	buffers if there's no data at all, but that's not something to be
-	expected in normal operations.
-
-	It's possible to calculate the maximum amount of memory this would take,
-	it's something like MAXBUF*MAXQ*16*1024 (buffers times queries times 
-	max size of a packet).
-
-	This is also supposed to work with multiple read-write pairs on different
-	sockets, to paralelize the different types of trafic.
 */
 
 #ifdef DEBUG
@@ -55,11 +38,9 @@
 #endif
 
 struct wrdata {
-	int rpos; // position of the element receiving data
-	int wpos[MAXFILES]; // position of the element being written
+	int rpos; // read thread pointer
+	int wpos[MAXFILES]; // write thread pointer
 	char *cbuf; // buffer with data
-	int buflen;
-	int bufpos;
 	pthread_mutex_t wrlock;
 
 	int fd;
@@ -92,7 +73,7 @@ int diffpos(int a, int b) {
 }
 
 /*
-	check if we read a packet at position rp in a ring buffer
+	check wether if we read a packet at position rp in a ring buffer
 	with size of BUFFER, we won't clobber wp
 */
 int overflows (int rp, int len, int wp) {
@@ -136,8 +117,7 @@ void *rcv_thread(void *ptr) {
 	flags = fcntl( dat->fd, F_GETFL, 0 );
 	fcntl( dat->fd, F_SETFL, flags | O_NONBLOCK );
 
-	dat->cbuf = calloc( BUFFER, 1 );
-	RP = 0;
+	dat->cbuf = calloc( 1, BUFFER );
 
 	while (42) {
 
@@ -154,7 +134,6 @@ void *rcv_thread(void *ptr) {
 			continue;
 
 		pthread_mutex_lock(&dat->wrlock);
-
 
 		// the current buffer is full, switch to a new one
 		// or the timeout passed
@@ -180,6 +159,7 @@ void *rcv_thread(void *ptr) {
 			memcpy ( &(dat->cbuf[0]), &buff[p1], p2 ); 
 
 		}
+
 		RP += buffdat;
 		RP %= BUFFER;
 		DBG ("RP moved to %d\n", RP);
@@ -197,9 +177,10 @@ void *wrt_thread(void *ptr) {
 	char *wrbuf;
 	struct timespec tv;
 
+	int datalen;
+
 	int fdno = tdat->fdno;
 
-	int datalen;
 
 	DBG("Starting write thread %d\n", fdno);	
 
@@ -313,7 +294,7 @@ int main(int argc, char **argv) {
 		tv.tv_sec = STATS_INTERVAL;
 		tv.tv_nsec = 0;
 		nanosleep( &tv, NULL);
-		printf("data: Dropped:\t%d\tProcesed:\t%d\tWP %d RP", data->dropped, data->processed, data->rpos);
+		printf("Procesed:\t%d\tWP %d RP", data->processed, data->rpos);
 		for (i=0; i<data->numfiles; i++) 
 			printf (" %d", diffpos(data->rpos, data->wpos[i]));
 		printf("\n");
