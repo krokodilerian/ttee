@@ -132,6 +132,7 @@ void *rcv_thread(void *ptr) {
 	int j;
 	int p1, p2;
 
+	int overflow;
 	struct timeval tv;
 
 	fd_set reads;
@@ -157,19 +158,26 @@ void *rcv_thread(void *ptr) {
 			if ( (buffdat == -1) && (errno = EAGAIN))
 				continue;
 			__sync_fetch_and_add(&dat->eof, 1);
+			DBG("EOF\n");
 			pthread_exit(NULL);
 		}
 
-		pthread_mutex_lock(&dat->wrlock);
+		while (43) {
+			overflow = 0;
+			pthread_mutex_lock(&dat->wrlock);
 
-		// the current buffer is full, switch to a new one
-		// or the timeout passed
-		for (j=0; j<dat->numfiles; j++) 
-			if ( overflows (RP,  buffdat, WP[j]) ) {
-				DBG("Ring buffer overflow, sleeping - RP %d WP %d WPid %d\n", RP, WP[j], j);
-				pthread_mutex_unlock( &dat->wrlock );
-				sleep_10ms();
-				continue;
+			if (dat->processed==0) break;
+			// the current buffer is full, switch to a new one
+			// or the timeout passed
+			for (j=0; (j<dat->numfiles) && (!overflow) ; j++) 
+				overflow |= overflows (RP,  buffdat, WP[j]);
+
+			if (!overflow) 
+				break;
+
+			pthread_mutex_unlock( &dat->wrlock );
+			DBG("Ring buffer overflow, sleeping - RP %d WP %d WPid %d ofw %d\n", RP, WP[j], j, overflow);
+			sleep_10ms();
 		}
 
 		if (RP + buffdat <= BUFFER) {
