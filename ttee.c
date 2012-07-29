@@ -98,15 +98,18 @@ int diffpos(int a, int b) {
 
 	if we are exactly at the end of the buffer and the wp is 0, we 
 	have a fucking specific corner case.
+
 */
 int overflows (int rp, int len, int wp) {
 	int rem;
 
-	if ( ( (rp+len) < BUFFER ) && ( (wp <= rp) || (wp > rp + len) ) )
+	if (wp == rp) return 0;
+
+	if ( ( (rp+len) < BUFFER ) && ( (wp < rp) || (wp > rp + len) ) )
 		return 0;
 
 	// really fugly corner case
-	if ( (rp+len) == BUFFER && wp == 0 )
+	if ( (rp+len) % BUFFER == wp )
 		return 1;
 
 	rem = len + rp - BUFFER;
