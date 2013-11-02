@@ -37,6 +37,8 @@
   #define DBG(x...)
 #endif
 
+#define ERR(x...) fprintf(stderr,## x) 
+
 struct wrdata {
 	int rpos; // read thread pointer
 	int wpos[MAXFILES]; // write thread pointer
@@ -158,7 +160,7 @@ void *rcv_thread(void *ptr) {
 			if ( (buffdat == -1) && (errno = EAGAIN))
 				continue;
 			__sync_fetch_and_add(&dat->eof, 1);
-			DBG("EOF\n");
+			ERR("EOF\n");
 			pthread_exit(NULL);
 		}
 
@@ -176,7 +178,7 @@ void *rcv_thread(void *ptr) {
 				break;
 
 			pthread_mutex_unlock( &dat->wrlock );
-			DBG("Ring buffer overflow, sleeping - RP %d WP %d WPid %d ofw %d\n", RP, WP[j], j, overflow);
+			ERR("Ring buffer overflow, sleeping - RP %d WP %d WPid %d ofw %d\n", RP, WP[j], j, overflow);
 			sleep_10ms();
 		}
 
@@ -252,7 +254,7 @@ void *wrt_thread(void *ptr) {
 
 			DBG("thread %d writing %d %d\n", fdno, WP[fdno], datalen);
 			if ( write( dat->fdo[fdno], wrbuf, datalen ) < datalen ) {
-				DBG("failed writing in thread %d, error %s\n", fdno, strerror(errno));
+				ERR("failed writing in thread %d, error %s\n", fdno, strerror(errno));
 				exit(3);
 			}
 
