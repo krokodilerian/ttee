@@ -6,7 +6,7 @@
 #define BUFSZ 8*1024
 
 // ring buffer size
-#define BUFFER 1024*1024
+#define BUFFER (256*1024*1024)
 
 // change this to enable debugging
 #undef DEBUG
