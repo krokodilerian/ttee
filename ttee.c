@@ -46,7 +46,7 @@ struct wrdata {
 	int fd;
 	int fdo[MAXFILES];
 
-	int dropped, processed;
+	uint64_t dropped, processed;
 	int numfiles;
 
 	int eof;
@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
 		tv.tv_sec = STATS_INTERVAL;
 		tv.tv_nsec = 0;
 		nanosleep( &tv, NULL);
-		printf("Procesed:\t%d\tWP %d RP", data->processed, data->rpos);
+		printf("Procesed:\t%ld\tWP %d RP", data->processed, data->rpos);
 		for (i=0; i<data->numfiles; i++) 
 			printf (" %d", diffpos(data->rpos, data->wpos[i]));
 		printf("\n");
